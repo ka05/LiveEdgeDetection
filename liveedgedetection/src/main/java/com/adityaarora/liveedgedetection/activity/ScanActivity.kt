@@ -31,6 +31,9 @@ import com.adityaarora.liveedgedetection.constants.ScanConstants
 import com.adityaarora.liveedgedetection.enums.ScanHint
 import com.adityaarora.liveedgedetection.interfaces.IScanner
 import com.adityaarora.liveedgedetection.util.ScanUtils
+import com.adityaarora.liveedgedetection.util.permissions.PermissionsDelegate
+import com.adityaarora.liveedgedetection.util.permissions.PermissionsHandler
+import com.adityaarora.liveedgedetection.util.permissions.PermissionsHandlerImpl
 import com.adityaarora.liveedgedetection.view.PolygonPoints
 import com.adityaarora.liveedgedetection.view.PolygonView
 import com.adityaarora.liveedgedetection.view.ProgressDialogFragment
@@ -43,16 +46,16 @@ import org.opencv.imgproc.Imgproc
 import java.util.ArrayList
 import java.util.HashMap
 import java.util.Stack
+import kotlin.math.abs
 
 /**
  * This class initiates camera and detects edges on live view
  */
-class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener {
+class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener, PermissionsDelegate {
 
     private var containerScan: ViewGroup? = null
     private var cameraPreviewLayout: FrameLayout? = null
     private var mImageSurfaceView: ScanSurfaceView? = null
-    private var isPermissionNotGranted = false
     private var captureHintText: TextView? = null
     private var captureHintLayout: LinearLayout? = null
     private var polygonView: PolygonView? = null
@@ -61,6 +64,9 @@ class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener {
     private var cropRejectBtn: View? = null
     private var copyBitmap: Bitmap? = null
     private var cropLayout: FrameLayout? = null
+
+    private val permissionsHandler: PermissionsHandler =
+            PermissionsHandlerImpl(this)
 
     @SuppressLint("SourceLockedOrientationActivity")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,80 +98,26 @@ class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener {
     }
 
     private fun checkCameraPermissions() {
-        if (ContextCompat.checkSelfPermission(this,
-                        Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            isPermissionNotGranted = true
-            if (ActivityCompat.shouldShowRequestPermissionRationale(this,
-                            Manifest.permission.CAMERA)) {
-                Toast.makeText(this, "Enable camera permission from settings", Toast.LENGTH_SHORT).show()
-            } else {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA),
-                        MY_PERMISSIONS_REQUEST_CAMERA)
-            }
+        if (!permissionsHandler.hasPermissions(this, Manifest.permission.CAMERA)) {
+            permissionsHandler.requestPermissions(this, Manifest.permission.CAMERA)
         } else {
-            if (!isPermissionNotGranted) {
-                mImageSurfaceView = ScanSurfaceView(this@ScanActivity, this)
-                cameraPreviewLayout?.addView(mImageSurfaceView)
-            } else {
-                isPermissionNotGranted = false
-            }
+            loadCameraView()
         }
     }
 
     override fun onRequestPermissionsResult(
             requestCode: Int,
-            permissions: Array<String>,
+            permissions: Array<String?>,
             grantResults: IntArray
     ) {
-        when (requestCode) {
-            MY_PERMISSIONS_REQUEST_CAMERA -> onRequestCamera(grantResults)
-            else -> {
-            }
-        }
-    }
-
-    private fun onRequestCamera(grantResults: IntArray) {
-        if (grantResults.isNotEmpty()
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            Handler().postDelayed({
-                runOnUiThread {
-                    mImageSurfaceView = ScanSurfaceView(this@ScanActivity, this@ScanActivity)
-                    cameraPreviewLayout!!.addView(mImageSurfaceView)
-                }
-            }, 500)
-        } else {
-            Toast.makeText(this, getString(R.string.camera_activity_permission_denied_toast), Toast.LENGTH_SHORT).show()
-            finish()
-        }
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        permissionsHandler.onRequestPermissionsResult(this, Manifest.permission.CAMERA, requestCode, grantResults)
     }
 
     override fun displayHint(scanHint: ScanHint?) {
-        captureHintLayout!!.visibility = View.VISIBLE
-        when (scanHint) {
-            ScanHint.MOVE_CLOSER -> {
-                captureHintText?.text = resources.getString(R.string.move_closer)
-                captureHintLayout?.background = resources.getDrawable(R.drawable.hint_red)
-            }
-            ScanHint.MOVE_AWAY -> {
-                captureHintText?.text = resources.getString(R.string.move_away)
-                captureHintLayout?.background = resources.getDrawable(R.drawable.hint_red)
-            }
-            ScanHint.ADJUST_ANGLE -> {
-                captureHintText?.text = resources.getString(R.string.adjust_angle)
-                captureHintLayout?.background = resources.getDrawable(R.drawable.hint_red)
-            }
-            ScanHint.FIND_RECT -> {
-                captureHintText?.text = resources.getString(R.string.finding_rect)
-                captureHintLayout?.background = resources.getDrawable(R.drawable.hint_white)
-            }
-            ScanHint.CAPTURING_IMAGE -> {
-                captureHintText?.text = resources.getString(R.string.hold_still)
-                captureHintLayout?.background = resources.getDrawable(R.drawable.hint_green)
-            }
-            ScanHint.NO_MESSAGE -> captureHintLayout?.visibility = View.GONE
-            else -> {
-            }
-        }
+        captureHintLayout?.visibility = if (scanHint == ScanHint.NO_MESSAGE) View.GONE else View.VISIBLE
+        captureHintText?.text = scanHint?.getText(this)
+        captureHintLayout?.background = scanHint?.getDrawable(this)
     }
 
     override fun onPictureClicked(bitmap: Bitmap?) {
@@ -184,7 +136,7 @@ class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener {
                 try {
                     val quad = ScanUtils.detectLargestQuadrilateral(originalMat)
                     if (null != quad) {
-                        val resultArea = Math.abs(Imgproc.contourArea(quad.contour))
+                        val resultArea = abs(Imgproc.contourArea(quad.contour))
                         val previewArea = originalMat.rows() * originalMat.cols().toDouble()
                         if (resultArea > previewArea * 0.08) {
                             points = ArrayList()
@@ -275,5 +227,21 @@ class ScanActivity : AppCompatActivity(), IScanner, View.OnClickListener {
                 finish()
             }
         }
+    }
+
+    private fun loadCameraView() {
+        mImageSurfaceView = ScanSurfaceView(this@ScanActivity, this)
+        cameraPreviewLayout?.addView(mImageSurfaceView)
+    }
+
+    override fun permissionsAccepted() {
+        loadCameraView()
+    }
+
+    override fun permissionsDenied() {
+        // show rational for camera permissions
+        // If permissions denied there's nothing we can do
+        Toast.makeText(this, getString(R.string.camera_activity_permission_denied_toast), Toast.LENGTH_SHORT).show()
+        finish()
     }
 }
